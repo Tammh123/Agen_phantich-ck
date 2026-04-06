@@ -40,6 +40,8 @@ class StyledPDF(FPDF):
         self.ln(1)
         self.set_font("Helvetica", size=9)
         self.set_text_color(*self.muted_color)
+        self.cell(0, 8, "Copyright Tammh AI MASTER", align="L")
+        self.set_y(-11)
         self.cell(0, 8, f"Trang {self.page_no()}", align="R")
 
 

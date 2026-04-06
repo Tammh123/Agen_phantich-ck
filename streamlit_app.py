@@ -366,7 +366,7 @@ def render_sidebar() -> None:
         st.markdown("""
         <div class="sidebar-logo">
             <div class="brand">📊 VnStock AI</div>
-            <div class="tagline">Phân tích chứng khoán thông minh</div>
+            <div class="tagline">by Tammh AI MASTER</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -417,7 +417,7 @@ def render_sidebar() -> None:
         """, unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        st.caption("© 2026 VnStock AI · Dữ liệu từ TCBS/VCI · Powered by Claude AI")
+        st.caption("© 2026 Tammh AI MASTER · VnStock AI · Dữ liệu từ TCBS/VCI · Powered by Claude AI")
 
 
 # ─────────────────────────────────────────────
@@ -729,5 +729,6 @@ with batch_tab:
 
 st.caption(
     "Lưu ý pháp lý: Hiệu suất quá khứ không đảm bảo kết quả tương lai. "
-    "Sản phẩm chỉ cung cấp thông tin và công cụ hỗ trợ phân tích."
+    "Sản phẩm chỉ cung cấp thông tin và công cụ hỗ trợ phân tích. "
+    "Bản quyền phần mềm thuộc Tammh AI MASTER."
 )
