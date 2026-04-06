@@ -1,5 +1,6 @@
 import requests
 import pandas as pd
+import time
 from vnstock import Vnstock  # Cho chứng khoán Việt Nam
 
 
@@ -17,37 +18,115 @@ _TCBS_HEADERS = {
 class StockDataFetcher:
     def __init__(self):
         self.stock = Vnstock()
+        self._ohlcv_cache = {}
+        self._cache_ttl_seconds = 300
+
+    @staticmethod
+    def _is_rate_limited_error(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return any(k in msg for k in ["429", "too many requests", "rate limit", "rate limited", "quota"])
+
+    def _with_retry(self, fetch_fn, attempts: int = 3, base_delay: float = 1.0):
+        last_exc = None
+        for attempt in range(attempts):
+            try:
+                return fetch_fn()
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= attempts - 1:
+                    break
+                delay = base_delay * (2 ** attempt)
+                if self._is_rate_limited_error(exc):
+                    delay = max(delay, 2.0)
+                time.sleep(delay)
+        raise last_exc
+
+    def _http_get_with_retry(
+        self,
+        url: str,
+        params: dict,
+        headers: dict,
+        timeout: int,
+        attempts: int = 3,
+        base_delay: float = 1.0,
+    ):
+        def _fetch():
+            resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+            if resp.status_code in (429, 500, 502, 503, 504):
+                raise requests.HTTPError(
+                    f"HTTP {resp.status_code} from {url}: {resp.text[:200]}",
+                    response=resp,
+                )
+            resp.raise_for_status()
+            return resp
+
+        return self._with_retry(_fetch, attempts=attempts, base_delay=base_delay)
 
     def get_ohlcv(self, symbol: str, period: int = 120) -> pd.DataFrame:
         """Lấy dữ liệu nến ngày, thử nhiều nguồn nếu nguồn chính bị chặn"""
         from datetime import datetime, timedelta
+        symbol_key = symbol.upper().strip()
         end = datetime.now().strftime("%Y-%m-%d")
         start = (datetime.now() - timedelta(days=period)).strftime("%Y-%m-%d")
+
+        cache_item = self._ohlcv_cache.get(symbol_key)
+        if cache_item:
+            cached_at, cached_df = cache_item
+            if time.time() - cached_at <= self._cache_ttl_seconds:
+                return cached_df.copy()
+
+        last_error = None
 
         # 1. vnstock sources
         for source in _VNSTOCK_SOURCES:
             try:
-                df = self.stock.stock(symbol=symbol, source=source).quote.history(
-                    start=start, end=end, interval="1D"
+                df = self._with_retry(
+                    lambda: self.stock.stock(symbol=symbol_key, source=source).quote.history(
+                        start=start, end=end, interval="1D"
+                    ),
+                    attempts=2,
+                    base_delay=1.0,
                 )
                 if df is not None and not df.empty:
+                    self._ohlcv_cache[symbol_key] = (time.time(), df.copy())
                     return df
-            except Exception:
+            except Exception as exc:
+                last_error = exc
                 continue
 
         # 2. TCBS direct REST API (bypass vnstock, gọi thẳng với browser headers)
         try:
-            return self._get_ohlcv_tcbs_direct(symbol, start, end)
-        except Exception:
+            df = self._with_retry(
+                lambda: self._get_ohlcv_tcbs_direct(symbol_key, start, end),
+                attempts=3,
+                base_delay=1.2,
+            )
+            self._ohlcv_cache[symbol_key] = (time.time(), df.copy())
+            return df
+        except Exception as exc:
+            last_error = exc
             pass
 
         # 3. yfinance fallback
         try:
-            return self._get_ohlcv_yfinance(symbol, start, end)
-        except Exception as e:
-            raise ConnectionError(
-                f"Không thể lấy dữ liệu {symbol} từ tất cả nguồn. Lỗi cuối: {e}"
+            df = self._with_retry(
+                lambda: self._get_ohlcv_yfinance(symbol_key, start, end),
+                attempts=2,
+                base_delay=1.2,
             )
+            self._ohlcv_cache[symbol_key] = (time.time(), df.copy())
+            return df
+        except Exception as exc:
+            last_error = exc
+
+        if cache_item:
+            _, cached_df = cache_item
+            if cached_df is not None and not cached_df.empty:
+                return cached_df.copy()
+
+        raise ConnectionError(
+            f"Không thể lấy dữ liệu {symbol_key} từ tất cả nguồn. Lỗi cuối: {last_error}"
+        )
 
     def _get_ohlcv_tcbs_direct(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         """Gọi thẳng TCBS REST API với browser headers"""
@@ -62,8 +141,14 @@ class StockDataFetcher:
             "from": from_ts,
             "to": to_ts,
         }
-        resp = requests.get(url, params=params, headers=_TCBS_HEADERS, timeout=15)
-        resp.raise_for_status()
+        resp = self._http_get_with_retry(
+            url=url,
+            params=params,
+            headers=_TCBS_HEADERS,
+            timeout=15,
+            attempts=3,
+            base_delay=1.2,
+        )
         bars = resp.json().get("data", [])
         if not bars:
             raise ValueError(f"TCBS direct API trả về rỗng cho {symbol}")
@@ -116,8 +201,14 @@ class StockDataFetcher:
         url = "https://apipubaws.tcbs.com.vn/stock-insight/v1/stock/intraday"
         params = {"ticker": symbol.upper(), "type": "stock", "size": 50}
         try:
-            resp = requests.get(url, params=params, headers=_TCBS_HEADERS, timeout=10)
-            resp.raise_for_status()
+            resp = self._http_get_with_retry(
+                url=url,
+                params=params,
+                headers=_TCBS_HEADERS,
+                timeout=10,
+                attempts=2,
+                base_delay=1.0,
+            )
             items = resp.json().get("data", [])
             if not items:
                 return {}
@@ -153,8 +244,14 @@ class StockDataFetcher:
             "to":         to_ts,
         }
         try:
-            resp = requests.get(url, params=params, headers=_TCBS_HEADERS, timeout=15)
-            resp.raise_for_status()
+            resp = self._http_get_with_retry(
+                url=url,
+                params=params,
+                headers=_TCBS_HEADERS,
+                timeout=15,
+                attempts=2,
+                base_delay=1.0,
+            )
             bars = resp.json().get("data", [])
             if not bars:
                 return pd.DataFrame()
