@@ -2,6 +2,7 @@ anthropic>=0.89.0
 python-dotenv>=1.2.0
 pandas>=2.2.0
 vnstock>=3.5.0
+yfinance>=0.2.54
 mplfinance>=0.12.10b0
 fpdf2>=2.8.2
 streamlit>=1.44.0

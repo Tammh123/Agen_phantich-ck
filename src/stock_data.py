@@ -2,19 +2,51 @@ import pandas as pd
 from vnstock import Vnstock  # Cho chứng khoán Việt Nam
 
 
+_VNSTOCK_SOURCES = ["TCBS", "VCI", "SSI"]
+
+
 class StockDataFetcher:
     def __init__(self):
         self.stock = Vnstock()
 
     def get_ohlcv(self, symbol: str, period: int = 120) -> pd.DataFrame:
-        """Lấy dữ liệu nến ngày"""
+        """Lấy dữ liệu nến ngày, thử nhiều nguồn nếu nguồn chính bị chặn"""
         from datetime import datetime, timedelta
         end = datetime.now().strftime("%Y-%m-%d")
         start = (datetime.now() - timedelta(days=period)).strftime("%Y-%m-%d")
 
-        df = self.stock.stock(symbol=symbol, source="VCI").quote.history(
-            start=start, end=end, interval="1D"
+        last_err = None
+        for source in _VNSTOCK_SOURCES:
+            try:
+                df = self.stock.stock(symbol=symbol, source=source).quote.history(
+                    start=start, end=end, interval="1D"
+                )
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                last_err = e
+                continue
+
+        # Fallback: yfinance (hoạt động từ bất kỳ IP nào)
+        try:
+            return self._get_ohlcv_yfinance(symbol, start, end)
+        except Exception as e:
+            last_err = e
+
+        raise ConnectionError(
+            f"Không thể lấy dữ liệu {symbol} từ tất cả nguồn. Lỗi cuối: {last_err}"
         )
+
+    def _get_ohlcv_yfinance(self, symbol: str, start: str, end: str) -> pd.DataFrame:
+        """Fallback dùng yfinance với mã .VN"""
+        import yfinance as yf
+        ticker = f"{symbol.upper()}.VN"
+        df = yf.download(ticker, start=start, end=end, auto_adjust=True, progress=False)
+        if df.empty:
+            raise ValueError(f"yfinance không tìm thấy dữ liệu cho {ticker}")
+        df = df.reset_index()
+        df.columns = [c.lower() if isinstance(c, str) else c[0].lower() for c in df.columns]
+        df = df.rename(columns={"date": "time"})
         return df
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
