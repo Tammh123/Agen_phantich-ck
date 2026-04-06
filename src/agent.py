@@ -40,9 +40,18 @@ class StockAnalysisAgent:
         return "Khong nhan duoc noi dung phan tich tu model. Vui long thu lai."
 
     @staticmethod
-    def _build_analysis_prompt(data_text: str) -> str:
+    def _build_analysis_prompt(data_text: str, intraday_text: str = "") -> str:
+        intraday_section = ""
+        if intraday_text:
+            intraday_section = f"""
+
+{intraday_text}
+
+⚡ LƯU Ý: Dữ liệu trên được lấy TRONG PHIÊN GIAO DỊCH đang diễn ra.
+Hãy phân tích cả diễn biến ngày hôm nay và đưa ra nhận xét tức thời.
+"""
         return f"""
-{data_text}
+{data_text}{intraday_section}
 
 Hãy phân tích và đưa ra khuyến nghị theo cấu trúc:
 
@@ -50,12 +59,16 @@ Hãy phân tích và đưa ra khuyến nghị theo cấu trúc:
 2. **XU HƯỚNG HIỆN TẠI** (ngắn/trung hạn)
 3. **CÁC CHỈ BÁO KỸ THUẬT** (RSI, MACD, BB)
 4. **VÙNG HỖ TRỢ / KHÁNG CỰ** quan trọng
-5. **KHUYẾN NGHỊ** (MUA / BÁN / CHỜ)
+5. **DIỄN BIẾN PHIÊN HÔM NAY** (nếu đang trong phiên)
+   - Xu hướng trong ngày (tăng/giảm/đi ngang)
+   - Độ mạnh của volume so với trung bình
+   - Áp lực mua/bán tức thời
+6. **KHUYẾN NGHỊ** (MUA / BÁN / CHỜ)
    - Điểm vào lệnh
    - Mục tiêu (T1, T2)
    - Stop-loss
    - Tỷ lệ Risk/Reward
-6. **MỨC ĐỘ TỰ TIN**: X/10
+7. **MỨC ĐỘ TỰ TIN**: X/10
 """
 
     def _analyze_single_symbol(self, symbol: str) -> str:
@@ -63,7 +76,15 @@ Hãy phân tích và đưa ra khuyến nghị theo cấu trúc:
         df = self.fetcher.get_ohlcv(symbol)
         df = self.fetcher.calculate_indicators(df)
         data_text = self.fetcher.to_text_summary(df, symbol)
-        user_message = self._build_analysis_prompt(data_text)
+
+        intraday_text = ""
+        if self.fetcher.is_trading_session():
+            try:
+                intraday_text = self.fetcher.intraday_text_summary(symbol)
+            except Exception:
+                intraday_text = ""
+
+        user_message = self._build_analysis_prompt(data_text, intraday_text)
 
         response = self.client.messages.create(
             model="claude-opus-4-5",
@@ -83,8 +104,16 @@ Hãy phân tích và đưa ra khuyến nghị theo cấu trúc:
         df = self.fetcher.calculate_indicators(df)
         data_text = self.fetcher.to_text_summary(df, symbol)
 
+        # Nếu đang trong phiên, bổ sung dữ liệu intraday
+        intraday_text = ""
+        if self.fetcher.is_trading_session():
+            try:
+                intraday_text = self.fetcher.intraday_text_summary(symbol)
+            except Exception:
+                intraday_text = ""
+
         # Tạo prompt phân tích
-        user_message = self._build_analysis_prompt(data_text)
+        user_message = self._build_analysis_prompt(data_text, intraday_text)
 
         self.conversation_history.append({"role": "user", "content": user_message})
 

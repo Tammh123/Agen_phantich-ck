@@ -88,6 +88,135 @@ class StockDataFetcher:
         needed = [c for c in ["time", "open", "high", "low", "close", "volume"] if c in df.columns]
         return df[needed]
 
+    # ──────────────────────────────────────────────────────────
+    # PHIÊN GIAO DỊCH HIỆN TẠI
+    # ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def is_trading_session() -> bool:
+        """Kiểm tra có đang trong phiên giao dịch HOSE/HNX không (giờ VN UTC+7)."""
+        from datetime import datetime, timezone, timedelta
+        VN_TZ = timezone(timedelta(hours=7))
+        now = datetime.now(VN_TZ)
+        if now.weekday() >= 5:          # Thứ 7, Chủ nhật
+            return False
+        open_t  = now.replace(hour=9,  minute=0,  second=0, microsecond=0)
+        close_t = now.replace(hour=14, minute=45, second=0, microsecond=0)
+        return open_t <= now <= close_t
+
+    @staticmethod
+    def get_vn_now_str() -> str:
+        """Trả về giờ Việt Nam hiện tại dạng chuỗi."""
+        from datetime import datetime, timezone, timedelta
+        VN_TZ = timezone(timedelta(hours=7))
+        return datetime.now(VN_TZ).strftime("%H:%M:%S %d/%m/%Y")
+
+    def get_current_price(self, symbol: str) -> dict:
+        """Lấy giá & khối lượng khớp lệnh mới nhất từ TCBS intraday API."""
+        url = "https://apipubaws.tcbs.com.vn/stock-insight/v1/stock/intraday"
+        params = {"ticker": symbol.upper(), "type": "stock", "size": 50}
+        try:
+            resp = requests.get(url, params=params, headers=_TCBS_HEADERS, timeout=10)
+            resp.raise_for_status()
+            items = resp.json().get("data", [])
+            if not items:
+                return {}
+            latest = items[0]
+            total_vol = sum(int(i.get("v", 0)) for i in items)
+            prices = [i.get("p", 0) for i in items if i.get("p", 0) > 0]
+            return {
+                "price":      latest.get("p", 0),
+                "high":       max(prices) if prices else 0,
+                "low":        min(prices) if prices else 0,
+                "volume":     total_vol,
+                "time":       latest.get("t", ""),
+                "side":       latest.get("a", ""),
+            }
+        except Exception:
+            return {}
+
+    def get_intraday_bars(self, symbol: str) -> pd.DataFrame:
+        """Lấy nến 1 phút cho ngày hôm nay từ TCBS (dùng bars-long-term endpoint)."""
+        from datetime import datetime, timezone, timedelta
+        VN_TZ = timezone(timedelta(hours=7))
+        now = datetime.now(VN_TZ)
+        today_start = now.replace(hour=8, minute=30, second=0, microsecond=0)
+        from_ts = int(today_start.timestamp())
+        to_ts   = int(now.timestamp())
+
+        url = "https://apipubaws.tcbs.com.vn/stock-insight/v1/stock/bars-long-term"
+        params = {
+            "ticker":     symbol.upper(),
+            "type":       "stock",
+            "resolution": "1",
+            "from":       from_ts,
+            "to":         to_ts,
+        }
+        try:
+            resp = requests.get(url, params=params, headers=_TCBS_HEADERS, timeout=15)
+            resp.raise_for_status()
+            bars = resp.json().get("data", [])
+            if not bars:
+                return pd.DataFrame()
+            df = pd.DataFrame(bars)
+            if "tradingDate" in df.columns:
+                df = df.rename(columns={"tradingDate": "time"})
+            df["time"] = pd.to_datetime(df["time"])
+            df.columns = [c.lower() for c in df.columns]
+            needed = [c for c in ["time", "open", "high", "low", "close", "volume"] if c in df.columns]
+            return df[needed].sort_values("time").reset_index(drop=True)
+        except Exception:
+            return pd.DataFrame()
+
+    def intraday_text_summary(self, symbol: str) -> str:
+        """Tạo text tóm tắt dữ liệu phiên giao dịch hôm nay cho AI."""
+        now_str = self.get_vn_now_str()
+        current = self.get_current_price(symbol)
+        bars_df = self.get_intraday_bars(symbol)
+
+        lines = [
+            f"=== DỮ LIỆU PHIÊN GIAO DỊCH HÔM NAY ({symbol}) ===",
+            f"Thời điểm lấy dữ liệu: {now_str} (giờ Việt Nam)",
+        ]
+        if current:
+            lines += [
+                f"Giá khớp gần nhất: {current.get('price', 0):,} VND lúc {current.get('time', '')}",
+                f"Cao nhất phiên:    {current.get('high', 0):,} VND",
+                f"Thấp nhất phiên:   {current.get('low', 0):,} VND",
+                f"KL khớp (50 lệnh): {current.get('volume', 0):,} cp",
+                f"Chiều lệnh cuối:   {current.get('side', 'N/A')}",
+            ]
+        if not bars_df.empty and "close" in bars_df.columns:
+            open_price  = bars_df["open"].iloc[0]
+            close_price = bars_df["close"].iloc[-1]
+            high_price  = bars_df["high"].max()
+            low_price   = bars_df["low"].min()
+            total_vol   = bars_df["volume"].sum()
+            change      = close_price - open_price
+            change_pct  = (change / open_price * 100) if open_price else 0
+            sign = "+" if change >= 0 else ""
+            lines += [
+                "",
+                f"Mở cửa:   {open_price:,.0f} VND",
+                f"Hiện tại: {close_price:,.0f} VND ({sign}{change:,.0f} | {sign}{change_pct:.2f}%)",
+                f"Cao nhất: {high_price:,.0f} | Thấp nhất: {low_price:,.0f}",
+                f"Tổng KL hôm nay: {total_vol/1e6:.2f} triệu cp",
+                f"Số nến 1-phút:   {len(bars_df)} nến",
+            ]
+            # Nến 5 phút gần nhất
+            recent = bars_df.tail(5)
+            lines.append("\nDiễn biến 5 phút gần nhất:")
+            for _, row in recent.iterrows():
+                t = str(row["time"])[-8:-3]
+                lines.append(
+                    f"  {t} | O:{row['open']:,.0f} H:{row['high']:,.0f} "
+                    f"L:{row['low']:,.0f} C:{row['close']:,.0f} KL:{int(row['volume']):,}"
+                )
+        else:
+            lines.append("(Chưa có dữ liệu nến intraday)")
+
+        return "\n".join(lines)
+
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Tính các chỉ báo kỹ thuật"""
         close = df['close']

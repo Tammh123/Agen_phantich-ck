@@ -283,6 +283,16 @@ def build_price_table(symbol: str) -> pd.DataFrame:
     return df.tail(20).copy()
 
 
+def build_intraday_data(symbol: str) -> tuple:
+    """Trả về (intraday_bars_df, current_price_dict) khi trong phiên giao dịch."""
+    fetcher = get_agent().fetcher
+    if not fetcher.is_trading_session():
+        return pd.DataFrame(), {}
+    bars = fetcher.get_intraday_bars(symbol)
+    current = fetcher.get_current_price(symbol)
+    return bars, current
+
+
 def analyze_single(symbol: str) -> str:
     agent = get_agent()
     agent.reset()
@@ -454,26 +464,57 @@ def render_single_tab() -> None:
             st.warning("⚠️ Vui lòng nhập mã cổ phiếu trước khi phân tích.")
             return
 
-        with st.spinner(f"🤖 AI đang phân tích mã **{symbol}**, vui lòng đợi..."):
+        fetcher = get_agent().fetcher
+        in_session = fetcher.is_trading_session()
+
+        spinner_msg = (
+            f"🔴 Đang trong phiên giao dịch — AI phân tích realtime mã **{symbol}**..."
+            if in_session else
+            f"🤖 AI đang phân tích mã **{symbol}**, vui lòng đợi..."
+        )
+        with st.spinner(spinner_msg):
             try:
-                result = analyze_single(symbol)
+                result   = analyze_single(symbol)
                 price_df = build_price_table(symbol)
+                intraday_bars, current_price = build_intraday_data(symbol)
             except Exception as exc:
                 st.error(f"❌ Không thể phân tích {symbol}: {exc}")
                 return
 
-        st.session_state.single_result = result
-        st.session_state.single_symbol_name = symbol
-        st.session_state.single_df = price_df
+        st.session_state.single_result        = result
+        st.session_state.single_symbol_name   = symbol
+        st.session_state.single_df            = price_df
+        st.session_state.single_intraday      = intraday_bars
+        st.session_state.single_current_price = current_price
+        st.session_state.single_in_session    = in_session
         st.session_state.pop("single_pdf_bytes", None)
-        st.session_state.pop("single_pdf_name", None)
-        st.session_state.pop("follow_up_answer", None)
+        st.session_state.pop("single_pdf_name",  None)
+        st.session_state.pop("follow_up_answer",  None)
 
-    result = st.session_state.get("single_result")
-    symbol = st.session_state.get("single_symbol_name")
-    price_df = st.session_state.get("single_df")
+    result        = st.session_state.get("single_result")
+    symbol        = st.session_state.get("single_symbol_name")
+    price_df      = st.session_state.get("single_df")
+    intraday_bars = st.session_state.get("single_intraday", pd.DataFrame())
+    current_price = st.session_state.get("single_current_price", {})
+    in_session    = st.session_state.get("single_in_session", False)
 
     if result and symbol:
+        # ── Badge phiên giao dịch ──
+        if in_session:
+            now_str = get_agent().fetcher.get_vn_now_str()
+            st.markdown(f"""
+            <div style="background:#e6f9ef;border:1.5px solid #0e9c65;border-radius:10px;
+                        padding:10px 18px;margin-bottom:14px;display:flex;align-items:center;gap:10px;">
+                <span style="font-size:1.3rem;">🔴</span>
+                <span style="color:#0a7a50;font-weight:700;font-size:0.97rem;">
+                    ĐANG TRONG PHIÊN GIAO DỊCH — Dữ liệu realtime · {now_str}
+                </span>
+                <span style="margin-left:auto;font-size:0.82rem;color:#3aaa7a;">
+                    HOSE 9:00 – 14:45 | HNX 9:00 – 15:00
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+
         st.markdown("---")
         col_left, col_right = st.columns([1.3, 1])
 
@@ -490,17 +531,38 @@ def render_single_tab() -> None:
 
         # ── Cột phải: Dữ liệu giá & biểu đồ ──
         with col_right:
-            if isinstance(price_df, pd.DataFrame) and not price_df.empty:
-                latest = price_df.iloc[-1]
-                prev = price_df.iloc[-2] if len(price_df) > 1 else latest
-                close_now = latest.get("close", 0)
-                close_prev = prev.get("close", 0)
-                change = close_now - close_prev
-                change_pct = (change / close_prev * 100) if close_prev else 0
-                direction = "up" if change >= 0 else "down"
-                sign = "+" if change >= 0 else ""
+            # Metric realtime khi trong phiên
+            if in_session and current_price:
+                rt_price  = current_price.get("price", 0)
+                rt_high   = current_price.get("high", 0)
+                rt_low    = current_price.get("low", 0)
+                rt_vol    = current_price.get("volume", 0)
+                rt_time   = current_price.get("time", "")
+                st.markdown(f"""
+                <div style="background:#fff8e1;border:1.5px solid #ffc107;border-radius:12px;
+                            padding:12px 16px;margin-bottom:12px;">
+                    <div style="font-size:0.75rem;font-weight:700;color:#b8860b;
+                                letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px;">
+                        ⚡ Giá Realtime (lúc {rt_time})
+                    </div>
+                    <div class="metric-row" style="margin-bottom:0">
+                        {_metric_html("Giá khớp", f"{rt_price:,}")}
+                        {_metric_html("Cao nhất", f"{rt_high:,}")}
+                        {_metric_html("Thấp nhất", f"{rt_low:,}")}
+                        {_metric_html("KL khớp", f"{rt_vol/1e3:.0f}K")}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
-                # Metric cards
+            elif isinstance(price_df, pd.DataFrame) and not price_df.empty:
+                latest     = price_df.iloc[-1]
+                prev       = price_df.iloc[-2] if len(price_df) > 1 else latest
+                close_now  = latest.get("close", 0)
+                close_prev = prev.get("close", 0)
+                change     = close_now - close_prev
+                change_pct = (change / close_prev * 100) if close_prev else 0
+                direction  = "up" if change >= 0 else "down"
+                sign       = "+" if change >= 0 else ""
                 st.markdown(f"""
                 <div class="metric-row">
                     {_metric_html("Giá đóng cửa", f"{close_now:,.0f}", direction)}
@@ -510,23 +572,39 @@ def render_single_tab() -> None:
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Biểu đồ giá
-                st.markdown("**📈 Biểu đồ giá đóng cửa (20 phiên gần nhất)**")
-                chart_df = price_df[["close"]].copy().reset_index(drop=True)
-                st.line_chart(chart_df, use_container_width=True, height=220)
+            # Biểu đồ intraday khi trong phiên
+            if in_session and isinstance(intraday_bars, pd.DataFrame) and not intraday_bars.empty and "close" in intraday_bars.columns:
+                st.markdown("**📈 Diễn biến giá trong phiên hôm nay (nến 1 phút)**")
+                intra_chart = intraday_bars[["close"]].copy().reset_index(drop=True)
+                st.line_chart(intra_chart, use_container_width=True, height=200)
 
-                # Bảng dữ liệu
-                st.markdown("**📋 Dữ liệu 20 phiên gần nhất**")
+                # Volume intraday
+                if "volume" in intraday_bars.columns:
+                    st.markdown("**📊 Khối lượng trong phiên**")
+                    vol_chart = intraday_bars[["volume"]].copy().reset_index(drop=True)
+                    st.bar_chart(vol_chart, use_container_width=True, height=120)
+
+                refresh_col, _ = st.columns([1, 3])
+                with refresh_col:
+                    if st.button("🔄 Cập nhật dữ liệu phiên", use_container_width=True):
+                        fetcher = get_agent().fetcher
+                        new_bars, new_price = build_intraday_data(symbol)
+                        st.session_state.single_intraday      = new_bars
+                        st.session_state.single_current_price = new_price
+                        st.rerun()
+
+            # Biểu đồ giá lịch sử (luôn hiển thị)
+            if isinstance(price_df, pd.DataFrame) and not price_df.empty:
+                st.markdown("**📈 Lịch sử giá 20 phiên gần nhất**")
+                chart_df = price_df[["close"]].copy().reset_index(drop=True)
+                st.line_chart(chart_df, use_container_width=True, height=180)
+
+                st.markdown("**📋 Dữ liệu kỹ thuật 20 phiên**")
                 show_cols = [c for c in ["time", "open", "high", "low", "close", "volume", "MA5", "MA20", "RSI", "MACD"] if c in price_df.columns]
                 display_df = price_df[show_cols].copy()
                 if "time" in display_df.columns:
                     display_df["time"] = display_df["time"].astype(str).str[:10]
-                st.dataframe(
-                    display_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=280,
-                )
+                st.dataframe(display_df, use_container_width=True, hide_index=True, height=260)
 
         # ── Follow-up Q&A ──
         st.markdown("---")
