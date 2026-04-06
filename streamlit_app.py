@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import traceback
 from pathlib import Path
 from typing import Dict, List
 
@@ -714,21 +715,30 @@ def render_batch_tab() -> None:
                 st.markdown(text)
 
 
-# ─────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────
-render_sidebar()
-render_header()
-render_disclaimer()
+def run_app() -> None:
+    # ─────────────────────────────────────────────
+    # MAIN
+    # ─────────────────────────────────────────────
+    render_sidebar()
+    render_header()
+    render_disclaimer()
 
-single_tab, batch_tab = st.tabs(["🔍 Phân tích 1 mã", "📊 Phân tích nhiều mã"])
-with single_tab:
-    render_single_tab()
-with batch_tab:
-    render_batch_tab()
+    single_tab, batch_tab = st.tabs(["🔍 Phân tích 1 mã", "📊 Phân tích nhiều mã"])
+    with single_tab:
+        render_single_tab()
+    with batch_tab:
+        render_batch_tab()
 
-st.caption(
-    "Lưu ý pháp lý: Hiệu suất quá khứ không đảm bảo kết quả tương lai. "
-    "Sản phẩm chỉ cung cấp thông tin và công cụ hỗ trợ phân tích. "
-    "Bản quyền phần mềm thuộc Tammh AI MASTER."
-)
+    st.caption(
+        "Lưu ý pháp lý: Hiệu suất quá khứ không đảm bảo kết quả tương lai. "
+        "Sản phẩm chỉ cung cấp thông tin và công cụ hỗ trợ phân tích. "
+        "Bản quyền phần mềm thuộc Tammh AI MASTER."
+    )
+
+
+try:
+    run_app()
+except Exception as exc:
+    st.error("Ứng dụng gặp lỗi khởi động. Vui lòng thử tải lại trang hoặc liên hệ quản trị viên.")
+    st.exception(exc)
+    st.code(traceback.format_exc())
