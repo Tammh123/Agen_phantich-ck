@@ -122,6 +122,8 @@ class ReportExporter:
             self._render_section_content(pdf, font_name, text)
             pdf.ln(3)
 
+        self._add_disclaimer_block(pdf, font_name)
+
         pdf.output(str(output_path))
 
     def _draw_intro_block(self, pdf: StyledPDF, font_name: str, title: str) -> None:
@@ -178,6 +180,25 @@ class ReportExporter:
             label = f"{idx}. Phan tich ma {symbol}"
             pdf.cell(0, 8, self._safe_text(label, font_name), border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
         pdf.ln(3)
+
+    def _add_disclaimer_block(self, pdf: StyledPDF, font_name: str) -> None:
+        pdf.ln(4)
+        pdf.set_draw_color(241, 196, 15)
+        pdf.set_fill_color(255, 248, 230)
+        block_h = 24
+        pdf.rect(pdf.l_margin, pdf.get_y(), pdf.w - pdf.l_margin - pdf.r_margin, block_h, style="DF")
+
+        pdf.set_xy(pdf.l_margin + 3, pdf.get_y() + 2)
+        pdf.set_text_color(102, 60, 0)
+        pdf.set_font(font_name, size=10)
+        title = "MIEN TRU TRACH NHIEM"
+        body = (
+            "Bao cao nay chi mang tinh tham khao, khong phai khuyen nghi mua/ban chung khoan. "
+            "Nha dau tu tu chiu trach nhiem voi quyet dinh giao dich va can tu danh gia rui ro."
+        )
+        pdf.multi_cell(0, 6, self._safe_text(title, font_name), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font(font_name, size=9)
+        pdf.multi_cell(0, 5, self._safe_text(body, font_name), new_x="LMARGIN", new_y="NEXT")
 
     def _render_symbol_title(self, pdf: StyledPDF, font_name: str, symbol: str) -> None:
         pdf.set_fill_color(36, 83, 181)

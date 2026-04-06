@@ -350,6 +350,14 @@ def _metric_html(label: str, value: str, cls: str = "") -> str:
     </div>"""
 
 
+def render_disclaimer() -> None:
+    st.warning(
+        "Miễn trừ trách nhiệm: Nội dung phân tích chỉ mang tính tham khảo, không phải khuyến nghị đầu tư bắt buộc. "
+        "Người dùng tự chịu trách nhiệm với mọi quyết định giao dịch và nên kết hợp thêm tư vấn tài chính độc lập.",
+        icon="⚖️",
+    )
+
+
 # ─────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────
@@ -390,6 +398,7 @@ def render_sidebar() -> None:
                 st.session_state.agent.reset()
             for key in [
                 "single_result", "single_symbol_name", "single_df",
+                "single_intraday", "single_current_price", "single_in_session",
                 "single_follow_up", "follow_up_answer",
                 "single_pdf_bytes", "single_pdf_name",
                 "batch_results", "batch_symbols",
@@ -397,6 +406,15 @@ def render_sidebar() -> None:
             ]:
                 st.session_state.pop(key, None)
             st.success("✅ Đã đặt lại thành công!")
+
+        st.markdown("""
+        <div class="sidebar-section" style="margin-top:12px;background:#fff8e8;border-color:#f3d28f;">
+            <h4>⚖️ Miễn trừ trách nhiệm</h4>
+            <div class="sidebar-item">Nội dung AI chỉ mang tính tham khảo.</div>
+            <div class="sidebar-item">Không phải lời khuyên mua/bán chứng khoán.</div>
+            <div class="sidebar-item">Vui lòng tự quản trị rủi ro trước khi giao dịch.</div>
+        </div>
+        """, unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.caption("© 2026 VnStock AI · Dữ liệu từ TCBS/VCI · Powered by Claude AI")
@@ -701,9 +719,15 @@ def render_batch_tab() -> None:
 # ─────────────────────────────────────────────
 render_sidebar()
 render_header()
+render_disclaimer()
 
 single_tab, batch_tab = st.tabs(["🔍 Phân tích 1 mã", "📊 Phân tích nhiều mã"])
 with single_tab:
     render_single_tab()
 with batch_tab:
     render_batch_tab()
+
+st.caption(
+    "Lưu ý pháp lý: Hiệu suất quá khứ không đảm bảo kết quả tương lai. "
+    "Sản phẩm chỉ cung cấp thông tin và công cụ hỗ trợ phân tích."
+)
