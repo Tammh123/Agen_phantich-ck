@@ -1,10 +1,12 @@
 import sys
 import io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+# Streamlit Cloud can provide wrapped streams without `.buffer`.
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, "buffer"):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 import asyncio
-import anthropic
 import os
 from typing import Dict, List
 from dotenv import load_dotenv
@@ -12,11 +14,18 @@ from knowledge_loader import KnowledgeLoader
 from report_exporter import ReportExporter
 from stock_data import StockDataFetcher
 
+try:
+    import anthropic
+except ModuleNotFoundError:
+    anthropic = None
+
 load_dotenv()
 
 
 class StockAnalysisAgent:
     def __init__(self):
+        if anthropic is None:
+            raise ModuleNotFoundError("Thiếu package anthropic. Cài bằng: pip install anthropic")
         self.client    = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         self.knowledge = KnowledgeLoader()
         self.fetcher   = StockDataFetcher()

@@ -11,10 +11,15 @@ except ModuleNotFoundError:
     FPDF = None
 
 
-class StyledPDF(FPDF):
+_FPDFBase = FPDF if FPDF is not None else object
+
+
+class StyledPDF(_FPDFBase):
     """PDF with simple branded header/footer."""
 
     def __init__(self, report_title: str):
+        if FPDF is None:
+            raise ModuleNotFoundError("Thiếu package fpdf2. Cài bằng lệnh: pip install fpdf2")
         super().__init__()
         self.report_title = report_title
         self.brand_color = (36, 83, 181)
