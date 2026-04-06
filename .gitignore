@@ -1,0 +1,29 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment variables
+.env
+
+# Build and tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local outputs
+reports/
+*.pdf
+
+# Streamlit local state
+.streamlit/secrets.toml
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
