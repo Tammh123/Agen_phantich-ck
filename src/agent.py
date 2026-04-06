@@ -19,20 +19,46 @@ try:
 except ModuleNotFoundError:
     anthropic = None
 
+try:
+    import google.generativeai as genai
+except ModuleNotFoundError:
+    genai = None
+
 load_dotenv()
 
 
 class StockAnalysisAgent:
-    def __init__(self):
-        if anthropic is None:
-            raise ModuleNotFoundError("Thiếu package anthropic. Cài bằng: pip install anthropic")
-        self.client    = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    def __init__(self, provider: str = "anthropic"):
+        self.provider = provider.lower()
         self.knowledge = KnowledgeLoader()
         self.fetcher   = StockDataFetcher()
-        self.exporter = ReportExporter()
+        self.exporter  = ReportExporter()
         self.system_prompt = self.knowledge.get_system_prompt()
         self.conversation_history = []
         self.max_batch_symbols = 5
+
+        if self.provider == "anthropic":
+            if anthropic is None:
+                raise ModuleNotFoundError("Thiếu package anthropic. Cài bằng: pip install anthropic")
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ValueError("Thiếu ANTHROPIC_API_KEY trong biến môi trường / Streamlit secrets.")
+            self.client = anthropic.Anthropic(api_key=api_key)
+            self.gemini_model = None
+        elif self.provider == "gemini":
+            if genai is None:
+                raise ModuleNotFoundError("Thiếu package google-generativeai. Cài bằng: pip install google-generativeai")
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                raise ValueError("Thiếu GEMINI_API_KEY trong biến môi trường / Streamlit secrets.")
+            genai.configure(api_key=api_key)
+            self.gemini_model = genai.GenerativeModel(
+                model_name="gemini-2.0-flash",
+                system_instruction=self.system_prompt,
+            )
+            self.client = None
+        else:
+            raise ValueError(f"Provider không hợp lệ: '{provider}'. Dùng 'anthropic' hoặc 'gemini'.")
 
     @staticmethod
     def _extract_response_text(response: object) -> str:
@@ -47,6 +73,26 @@ class StockAnalysisAgent:
         if combined:
             return combined
         return "Khong nhan duoc noi dung phan tich tu model. Vui long thu lai."
+
+    def _call_ai(self, messages: List[Dict], max_tokens: int = 2048) -> str:
+        """Gọi AI model (Anthropic hoặc Gemini) với lịch sử hội thoại."""
+        if self.provider == "anthropic":
+            response = self.client.messages.create(
+                model="claude-opus-4-5",
+                max_tokens=max_tokens,
+                system=self.system_prompt,
+                messages=messages,
+            )
+            return self._extract_response_text(response)
+        else:  # gemini
+            # Chuyển định dạng history sang Gemini format
+            gemini_history = []
+            for msg in messages[:-1]:
+                role = "user" if msg["role"] == "user" else "model"
+                gemini_history.append({"role": role, "parts": [msg["content"]]})
+            chat = self.gemini_model.start_chat(history=gemini_history)
+            response = chat.send_message(messages[-1]["content"])
+            return response.text
 
     @staticmethod
     def _build_analysis_prompt(data_text: str, intraday_text: str = "") -> str:
@@ -94,14 +140,7 @@ Hãy phân tích và đưa ra khuyến nghị theo cấu trúc:
                 intraday_text = ""
 
         user_message = self._build_analysis_prompt(data_text, intraday_text)
-
-        response = self.client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=2048,
-            system=self.system_prompt,
-            messages=[{"role": "user", "content": user_message}]
-        )
-        analysis_result = self._extract_response_text(response)
+        analysis_result = self._call_ai([{"role": "user", "content": user_message}])
         return analysis_result
 
     def analyze(self, symbol: str) -> str:
@@ -128,14 +167,7 @@ Hãy phân tích và đưa ra khuyến nghị theo cấu trúc:
 
         print(f"🤖 Agent đang phân tích {symbol}...\n")
 
-        response = self.client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=2048,
-            system=self.system_prompt,
-            messages=self.conversation_history
-        )
-
-        analysis_result = self._extract_response_text(response)
+        analysis_result = self._call_ai(self.conversation_history)
         self.conversation_history.append({"role": "assistant", "content": analysis_result})
 
         return analysis_result
@@ -165,15 +197,7 @@ Hãy phân tích và đưa ra khuyến nghị theo cấu trúc:
     def follow_up(self, question: str) -> str:
         """Hỏi thêm về phân tích vừa rồi (multi-turn)"""
         self.conversation_history.append({"role": "user", "content": question})
-
-        response = self.client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=1024,
-            system=self.system_prompt,
-            messages=self.conversation_history
-        )
-
-        follow_up_result = self._extract_response_text(response)
+        follow_up_result = self._call_ai(self.conversation_history, max_tokens=1024)
         self.conversation_history.append({"role": "assistant", "content": follow_up_result})
         return follow_up_result
 

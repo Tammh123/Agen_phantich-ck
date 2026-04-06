@@ -289,8 +289,11 @@ div[data-testid="stDownloadButton"] > button:hover {
 # ─────────────────────────────────────────────
 def get_agent() -> Any:
     agent_cls, _ = _load_agent_symbols()
-    if "agent" not in st.session_state:
-        st.session_state.agent = agent_cls()
+    provider = st.session_state.get("ai_provider", "anthropic")
+    current_agent = st.session_state.get("agent")
+    # Tạo lại agent nếu chưa có hoặc provider đã thay đổi
+    if current_agent is None or getattr(current_agent, "provider", None) != provider:
+        st.session_state.agent = agent_cls(provider=provider)
     return st.session_state.agent
 
 
@@ -390,8 +393,20 @@ def render_sidebar() -> None:
 
         st.markdown("---")
 
-        st.markdown("""
-        <div class="sidebar-section">
+        # Chọn AI Provider
+        provider_choice = st.selectbox(
+            "🤖 Chọn AI Model",
+            options=["anthropic", "gemini"],
+            format_func=lambda x: "🟣 Claude (Anthropic)" if x == "anthropic" else "🔵 Gemini Pro (Google)",
+            key="ai_provider",
+            help="Anthropic Claude: chất lượng cao\nGemini Pro: miễn phí quota lớn"
+        )
+        if provider_choice == "anthropic":
+            st.caption("🟣 Đang dùng Claude Opus | Yêu cầu ANTHROPIC\_API\_KEY")
+        else:
+            st.caption("🔵 Đang dùng Gemini 2.0 Flash | Yêu cầu GEMINI\_API\_KEY")
+
+        st.markdown("---")
             <h4>⚡ Tính năng</h4>
             <div class="sidebar-item">🔍 <span>Phân tích đơn lẻ hoặc nhiều mã cùng lúc</span></div>
             <div class="sidebar-item">🤖 <span>AI Claude phân tích kỹ thuật & cơ bản</span></div>
@@ -435,7 +450,9 @@ def render_sidebar() -> None:
         """, unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        st.caption("© 2026 Tammh AI MASTER · VnStock AI · Dữ liệu từ TCBS/VCI · Powered by Claude AI")
+        _prov = st.session_state.get("ai_provider", "anthropic")
+        _prov_label = "Claude AI" if _prov == "anthropic" else "Gemini Pro"
+        st.caption(f"© 2026 Tammh AI MASTER · VnStock AI · Dữ liệu từ TCBS/VCI · Powered by {_prov_label}")
 
 
 # ─────────────────────────────────────────────
