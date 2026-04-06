@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import time
+from pathlib import Path
 from vnstock import Vnstock  # Cho chứng khoán Việt Nam
 
 
@@ -20,6 +21,40 @@ class StockDataFetcher:
         self.stock = Vnstock()
         self._ohlcv_cache = {}
         self._cache_ttl_seconds = 300
+        self._disk_cache_dir = Path(__file__).resolve().parents[1] / "cache" / "ohlcv"
+        self._disk_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _cache_file_path(self, symbol_key: str) -> Path:
+        return self._disk_cache_dir / f"{symbol_key}.csv"
+
+    def _save_disk_cache(self, symbol_key: str, df: pd.DataFrame) -> None:
+        try:
+            if df is None or df.empty:
+                return
+            data = df.copy()
+            if "time" in data.columns:
+                data["time"] = pd.to_datetime(data["time"], errors="coerce")
+            data.to_csv(self._cache_file_path(symbol_key), index=False)
+        except Exception:
+            pass
+
+    def _load_disk_cache(self, symbol_key: str) -> pd.DataFrame:
+        try:
+            cache_path = self._cache_file_path(symbol_key)
+            if not cache_path.exists():
+                return pd.DataFrame()
+            data = pd.read_csv(cache_path)
+            if data.empty:
+                return pd.DataFrame()
+            data.columns = [c.lower() for c in data.columns]
+            if "time" in data.columns:
+                data["time"] = pd.to_datetime(data["time"], errors="coerce")
+            needed = [c for c in ["time", "open", "high", "low", "close", "volume"] if c in data.columns]
+            if not needed:
+                return pd.DataFrame()
+            return data[needed].dropna(subset=["close"]).reset_index(drop=True)
+        except Exception:
+            return pd.DataFrame()
 
     @staticmethod
     def _is_rate_limited_error(exc: Exception) -> bool:
@@ -89,6 +124,7 @@ class StockDataFetcher:
                 )
                 if df is not None and not df.empty:
                     self._ohlcv_cache[symbol_key] = (time.time(), df.copy())
+                    self._save_disk_cache(symbol_key, df)
                     return df
             except Exception as exc:
                 last_error = exc
@@ -102,6 +138,7 @@ class StockDataFetcher:
                 base_delay=1.2,
             )
             self._ohlcv_cache[symbol_key] = (time.time(), df.copy())
+            self._save_disk_cache(symbol_key, df)
             return df
         except Exception as exc:
             last_error = exc
@@ -115,6 +152,7 @@ class StockDataFetcher:
                 base_delay=1.2,
             )
             self._ohlcv_cache[symbol_key] = (time.time(), df.copy())
+            self._save_disk_cache(symbol_key, df)
             return df
         except Exception as exc:
             last_error = exc
@@ -123,6 +161,11 @@ class StockDataFetcher:
             _, cached_df = cache_item
             if cached_df is not None and not cached_df.empty:
                 return cached_df.copy()
+
+        disk_cached_df = self._load_disk_cache(symbol_key)
+        if not disk_cached_df.empty:
+            self._ohlcv_cache[symbol_key] = (time.time(), disk_cached_df.copy())
+            return disk_cached_df
 
         raise ConnectionError(
             f"Không thể lấy dữ liệu {symbol_key} từ tất cả nguồn. Lỗi cuối: {last_error}"
