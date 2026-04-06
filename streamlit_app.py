@@ -402,11 +402,13 @@ def render_sidebar() -> None:
             help="Anthropic Claude: chất lượng cao\nGemini Pro: miễn phí quota lớn"
         )
         if provider_choice == "anthropic":
-            st.caption("🟣 Đang dùng Claude Opus | Yêu cầu ANTHROPIC\_API\_KEY")
+            st.caption("🟣 Đang dùng Claude Opus | Yêu cầu ANTHROPIC_API_KEY")
         else:
-            st.caption("🔵 Đang dùng Gemini 2.0 Flash | Yêu cầu GEMINI\_API\_KEY")
+            st.caption("🔵 Đang dùng Gemini 2.0 Flash | Yêu cầu GEMINI_API_KEY")
 
         st.markdown("---")
+        st.markdown("""
+        <div class="sidebar-section">
             <h4>⚡ Tính năng</h4>
             <div class="sidebar-item">🔍 <span>Phân tích đơn lẻ hoặc nhiều mã cùng lúc</span></div>
             <div class="sidebar-item">🤖 <span>AI Claude phân tích kỹ thuật & cơ bản</span></div>
