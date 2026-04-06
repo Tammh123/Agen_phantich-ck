@@ -26,6 +26,12 @@ except ModuleNotFoundError:
 
 load_dotenv()
 
+_GEMINI_MODEL_CANDIDATES = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
+
 
 class StockAnalysisAgent:
     def __init__(self, provider: str = "anthropic"):
@@ -42,6 +48,7 @@ class StockAnalysisAgent:
 
         self.client: Optional[object] = None
         self.gemini_model: Optional[object] = None
+        self.gemini_model_name: Optional[str] = None
         self.last_provider_used: str = ""
 
         self._anthropic_error: Optional[str] = None
@@ -83,13 +90,43 @@ class StockAnalysisAgent:
         try:
             genai.configure(api_key=api_key)
             self.gemini_model = genai.GenerativeModel(
-                model_name="gemini-2.0-flash",
+                model_name=_GEMINI_MODEL_CANDIDATES[0],
                 system_instruction=self.system_prompt,
             )
+            self.gemini_model_name = _GEMINI_MODEL_CANDIDATES[0]
             self._gemini_error = None
         except Exception as exc:
             self.gemini_model = None
+            self.gemini_model_name = None
             self._gemini_error = str(exc)
+
+    def _call_gemini_with_model_fallback(self, messages: List[Dict]) -> str:
+        last_exc: Optional[Exception] = None
+        gemini_history = []
+        for msg in messages[:-1]:
+            role = "user" if msg["role"] == "user" else "model"
+            gemini_history.append({"role": role, "parts": [msg["content"]]})
+
+        for model_name in _GEMINI_MODEL_CANDIDATES:
+            try:
+                model = self.gemini_model
+                if self.gemini_model_name != model_name or model is None:
+                    model = genai.GenerativeModel(
+                        model_name=model_name,
+                        system_instruction=self.system_prompt,
+                    )
+                chat = model.start_chat(history=gemini_history)
+                response = chat.send_message(messages[-1]["content"])
+                self.gemini_model = model
+                self.gemini_model_name = model_name
+                return response.text
+            except Exception as exc:
+                last_exc = exc
+                continue
+
+        raise RuntimeError(
+            f"Gemini không khả dụng với các model {_GEMINI_MODEL_CANDIDATES}. Lỗi cuối: {last_exc}"
+        ) from last_exc
 
     def _provider_available(self, provider_name: str) -> bool:
         if provider_name == "anthropic":
@@ -110,17 +147,9 @@ class StockAnalysisAgent:
             )
             return self._extract_response_text(response)
 
-        if self.gemini_model is None:
+        if self.gemini_model is None and genai is None:
             raise RuntimeError(self._gemini_error or "Gemini không sẵn sàng")
-
-        # Chuyển định dạng history sang Gemini format
-        gemini_history = []
-        for msg in messages[:-1]:
-            role = "user" if msg["role"] == "user" else "model"
-            gemini_history.append({"role": role, "parts": [msg["content"]]})
-        chat = self.gemini_model.start_chat(history=gemini_history)
-        response = chat.send_message(messages[-1]["content"])
-        return response.text
+        return self._call_gemini_with_model_fallback(messages)
 
     @staticmethod
     def _extract_response_text(response: object) -> str:

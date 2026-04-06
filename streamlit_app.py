@@ -404,7 +404,7 @@ def render_sidebar() -> None:
         if provider_choice == "anthropic":
             st.caption("🟣 Đang dùng Claude Opus | Yêu cầu ANTHROPIC_API_KEY")
         else:
-            st.caption("🔵 Đang dùng Gemini 2.0 Flash | Yêu cầu GEMINI_API_KEY")
+            st.caption("🔵 Đang dùng Gemini 2.5 Flash (fallback tự động) | Yêu cầu GEMINI_API_KEY")
 
         st.markdown("---")
         st.markdown("""
