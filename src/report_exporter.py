@@ -301,19 +301,60 @@ class ReportExporter:
         pdf.ln(1)
 
     def _register_font(self, pdf: Any) -> str:
+        # Thứ tự ưu tiên: Windows → Linux (Streamlit Cloud) → macOS → tải về cache
         candidates = [
+            # Windows
             Path("C:/Windows/Fonts/arial.ttf"),
             Path("C:/Windows/Fonts/tahoma.ttf"),
             Path("C:/Windows/Fonts/segoeui.ttf"),
+            # Ubuntu / Debian (Streamlit Cloud)
+            Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            Path("/usr/share/fonts/dejavu/DejaVuSans.ttf"),
+            Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+            Path("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"),
+            Path("/usr/share/fonts/noto/NotoSans-Regular.ttf"),
+            Path("/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
+            # macOS
+            Path("/Library/Fonts/Arial.ttf"),
+            Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
         ]
         for font_path in candidates:
             if font_path.exists():
+                try:
+                    pdf.add_font("CustomUnicode", style="", fname=str(font_path))
+                    return "CustomUnicode"
+                except Exception:
+                    continue
+
+        # Tải DejaVu Sans về cache nếu không tìm thấy font nào
+        try:
+            font_path = self._download_fallback_font()
+            if font_path and font_path.exists():
                 pdf.add_font("CustomUnicode", style="", fname=str(font_path))
                 return "CustomUnicode"
+        except Exception:
+            pass
+
         return "Helvetica"
 
     @staticmethod
+    def _download_fallback_font() -> Path:
+        """Tải DejaVu Sans (hỗ trợ tiếng Việt) về thư mục cache."""
+        import urllib.request
+        cache_dir = Path.home() / ".cache" / "vnstock_ai_fonts"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        font_path = cache_dir / "DejaVuSans.ttf"
+        if not font_path.exists():
+            url = (
+                "https://github.com/dejavu-fonts/dejavu-fonts/raw/master"
+                "/ttf/DejaVuSans.ttf"
+            )
+            urllib.request.urlretrieve(url, font_path)  # noqa: S310
+        return font_path
+
+    @staticmethod
     def _safe_text(text: str, font_name: str) -> str:
+        # Chỉ strip về latin-1 khi hoàn toàn không có font Unicode (Helvetica built-in)
         if font_name == "Helvetica":
             return text.encode("latin-1", errors="replace").decode("latin-1")
         return text
