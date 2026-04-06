@@ -1,8 +1,17 @@
+import requests
 import pandas as pd
 from vnstock import Vnstock  # Cho chứng khoán Việt Nam
 
 
 _VNSTOCK_SOURCES = ["TCBS", "VCI", "SSI"]
+
+_TCBS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8",
+    "Origin": "https://tcinvest.tcbs.com.vn",
+    "Referer": "https://tcinvest.tcbs.com.vn/",
+}
 
 
 class StockDataFetcher:
@@ -15,7 +24,7 @@ class StockDataFetcher:
         end = datetime.now().strftime("%Y-%m-%d")
         start = (datetime.now() - timedelta(days=period)).strftime("%Y-%m-%d")
 
-        last_err = None
+        # 1. vnstock sources
         for source in _VNSTOCK_SOURCES:
             try:
                 df = self.stock.stock(symbol=symbol, source=source).quote.history(
@@ -23,31 +32,61 @@ class StockDataFetcher:
                 )
                 if df is not None and not df.empty:
                     return df
-            except Exception as e:
-                last_err = e
+            except Exception:
                 continue
 
-        # Fallback: yfinance (hoạt động từ bất kỳ IP nào)
+        # 2. TCBS direct REST API (bypass vnstock, gọi thẳng với browser headers)
+        try:
+            return self._get_ohlcv_tcbs_direct(symbol, start, end)
+        except Exception:
+            pass
+
+        # 3. yfinance fallback
         try:
             return self._get_ohlcv_yfinance(symbol, start, end)
         except Exception as e:
-            last_err = e
+            raise ConnectionError(
+                f"Không thể lấy dữ liệu {symbol} từ tất cả nguồn. Lỗi cuối: {e}"
+            )
 
-        raise ConnectionError(
-            f"Không thể lấy dữ liệu {symbol} từ tất cả nguồn. Lỗi cuối: {last_err}"
-        )
+    def _get_ohlcv_tcbs_direct(self, symbol: str, start: str, end: str) -> pd.DataFrame:
+        """Gọi thẳng TCBS REST API với browser headers"""
+        from datetime import datetime
+        from_ts = int(datetime.strptime(start, "%Y-%m-%d").timestamp())
+        to_ts = int(datetime.strptime(end, "%Y-%m-%d").timestamp())
+        url = "https://apipubaws.tcbs.com.vn/stock-insight/v1/stock/bars-long-term"
+        params = {
+            "ticker": symbol.upper(),
+            "type": "stock",
+            "resolution": "D",
+            "from": from_ts,
+            "to": to_ts,
+        }
+        resp = requests.get(url, params=params, headers=_TCBS_HEADERS, timeout=15)
+        resp.raise_for_status()
+        bars = resp.json().get("data", [])
+        if not bars:
+            raise ValueError(f"TCBS direct API trả về rỗng cho {symbol}")
+        df = pd.DataFrame(bars)
+        df = df.rename(columns={"tradingDate": "time"})
+        df["time"] = pd.to_datetime(df["time"])
+        df.columns = [c.lower() for c in df.columns]
+        needed = [c for c in ["time", "open", "high", "low", "close", "volume"] if c in df.columns]
+        return df[needed].sort_values("time").reset_index(drop=True)
 
     def _get_ohlcv_yfinance(self, symbol: str, start: str, end: str) -> pd.DataFrame:
-        """Fallback dùng yfinance với mã .VN"""
+        """Fallback yfinance dùng Ticker.history() (sạch hơn download())"""
         import yfinance as yf
-        ticker = f"{symbol.upper()}.VN"
-        df = yf.download(ticker, start=start, end=end, auto_adjust=True, progress=False)
+        ticker_str = f"{symbol.upper()}.VN"
+        ticker_obj = yf.Ticker(ticker_str)
+        df = ticker_obj.history(start=start, end=end, auto_adjust=True)
         if df.empty:
-            raise ValueError(f"yfinance không tìm thấy dữ liệu cho {ticker}")
+            raise ValueError(f"yfinance không tìm thấy dữ liệu cho {ticker_str}")
         df = df.reset_index()
-        df.columns = [c.lower() if isinstance(c, str) else c[0].lower() for c in df.columns]
+        df.columns = [c.lower() for c in df.columns]
         df = df.rename(columns={"date": "time"})
-        return df
+        needed = [c for c in ["time", "open", "high", "low", "close", "volume"] if c in df.columns]
+        return df[needed]
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Tính các chỉ báo kỹ thuật"""
