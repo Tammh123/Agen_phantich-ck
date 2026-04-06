@@ -8,7 +8,7 @@ if hasattr(sys.stderr, "buffer"):
 
 import asyncio
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 from dotenv import load_dotenv
 from knowledge_loader import KnowledgeLoader
 from report_exporter import ReportExporter
@@ -37,28 +37,90 @@ class StockAnalysisAgent:
         self.conversation_history = []
         self.max_batch_symbols = 5
 
-        if self.provider == "anthropic":
-            if anthropic is None:
-                raise ModuleNotFoundError("Thiếu package anthropic. Cài bằng: pip install anthropic")
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise ValueError("Thiếu ANTHROPIC_API_KEY trong biến môi trường / Streamlit secrets.")
+        if self.provider not in {"anthropic", "gemini"}:
+            raise ValueError(f"Provider không hợp lệ: '{provider}'. Dùng 'anthropic' hoặc 'gemini'.")
+
+        self.client: Optional[object] = None
+        self.gemini_model: Optional[object] = None
+        self.last_provider_used: str = ""
+
+        self._anthropic_error: Optional[str] = None
+        self._gemini_error: Optional[str] = None
+
+        self._init_anthropic()
+        self._init_gemini()
+
+        if not self._provider_available("anthropic") and not self._provider_available("gemini"):
+            raise RuntimeError(
+                "Không thể khởi tạo AI provider nào. "
+                f"Anthropic: {self._anthropic_error or 'unknown'} | "
+                f"Gemini: {self._gemini_error or 'unknown'}"
+            )
+
+    def _init_anthropic(self) -> None:
+        if anthropic is None:
+            self._anthropic_error = "Thiếu package anthropic"
+            return
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            self._anthropic_error = "Thiếu ANTHROPIC_API_KEY"
+            return
+        try:
             self.client = anthropic.Anthropic(api_key=api_key)
-            self.gemini_model = None
-        elif self.provider == "gemini":
-            if genai is None:
-                raise ModuleNotFoundError("Thiếu package google-generativeai. Cài bằng: pip install google-generativeai")
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                raise ValueError("Thiếu GEMINI_API_KEY trong biến môi trường / Streamlit secrets.")
+            self._anthropic_error = None
+        except Exception as exc:
+            self.client = None
+            self._anthropic_error = str(exc)
+
+    def _init_gemini(self) -> None:
+        if genai is None:
+            self._gemini_error = "Thiếu package google-generativeai"
+            return
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            self._gemini_error = "Thiếu GEMINI_API_KEY"
+            return
+        try:
             genai.configure(api_key=api_key)
             self.gemini_model = genai.GenerativeModel(
                 model_name="gemini-2.0-flash",
                 system_instruction=self.system_prompt,
             )
-            self.client = None
-        else:
-            raise ValueError(f"Provider không hợp lệ: '{provider}'. Dùng 'anthropic' hoặc 'gemini'.")
+            self._gemini_error = None
+        except Exception as exc:
+            self.gemini_model = None
+            self._gemini_error = str(exc)
+
+    def _provider_available(self, provider_name: str) -> bool:
+        if provider_name == "anthropic":
+            return self.client is not None
+        if provider_name == "gemini":
+            return self.gemini_model is not None
+        return False
+
+    def _call_provider(self, provider_name: str, messages: List[Dict], max_tokens: int) -> str:
+        if provider_name == "anthropic":
+            if self.client is None:
+                raise RuntimeError(self._anthropic_error or "Anthropic không sẵn sàng")
+            response = self.client.messages.create(
+                model="claude-opus-4-5",
+                max_tokens=max_tokens,
+                system=self.system_prompt,
+                messages=messages,
+            )
+            return self._extract_response_text(response)
+
+        if self.gemini_model is None:
+            raise RuntimeError(self._gemini_error or "Gemini không sẵn sàng")
+
+        # Chuyển định dạng history sang Gemini format
+        gemini_history = []
+        for msg in messages[:-1]:
+            role = "user" if msg["role"] == "user" else "model"
+            gemini_history.append({"role": role, "parts": [msg["content"]]})
+        chat = self.gemini_model.start_chat(history=gemini_history)
+        response = chat.send_message(messages[-1]["content"])
+        return response.text
 
     @staticmethod
     def _extract_response_text(response: object) -> str:
@@ -75,24 +137,42 @@ class StockAnalysisAgent:
         return "Khong nhan duoc noi dung phan tich tu model. Vui long thu lai."
 
     def _call_ai(self, messages: List[Dict], max_tokens: int = 2048) -> str:
-        """Gọi AI model (Anthropic hoặc Gemini) với lịch sử hội thoại."""
-        if self.provider == "anthropic":
-            response = self.client.messages.create(
-                model="claude-opus-4-5",
-                max_tokens=max_tokens,
-                system=self.system_prompt,
-                messages=messages,
+        """Gọi AI model; tự động fallback sang provider còn lại nếu provider chính lỗi."""
+        primary = self.provider
+        secondary = "gemini" if primary == "anthropic" else "anthropic"
+
+        primary_error: Optional[Exception] = None
+        if self._provider_available(primary):
+            try:
+                result = self._call_provider(primary, messages, max_tokens)
+                self.last_provider_used = primary
+                return result
+            except Exception as exc:
+                primary_error = exc
+        else:
+            primary_error = RuntimeError(
+                self._anthropic_error if primary == "anthropic" else self._gemini_error
             )
-            return self._extract_response_text(response)
-        else:  # gemini
-            # Chuyển định dạng history sang Gemini format
-            gemini_history = []
-            for msg in messages[:-1]:
-                role = "user" if msg["role"] == "user" else "model"
-                gemini_history.append({"role": role, "parts": [msg["content"]]})
-            chat = self.gemini_model.start_chat(history=gemini_history)
-            response = chat.send_message(messages[-1]["content"])
-            return response.text
+
+        if self._provider_available(secondary):
+            try:
+                fallback_result = self._call_provider(secondary, messages, max_tokens)
+                self.last_provider_used = secondary
+                return (
+                    f"⚠️ Provider {primary} tạm thời lỗi ({type(primary_error).__name__}: {primary_error}). "
+                    f"Đã tự chuyển sang {secondary}.\n\n{fallback_result}"
+                )
+            except Exception as secondary_exc:
+                raise RuntimeError(
+                    f"Cả 2 provider đều lỗi. "
+                    f"{primary}: {type(primary_error).__name__}: {primary_error} | "
+                    f"{secondary}: {type(secondary_exc).__name__}: {secondary_exc}"
+                ) from secondary_exc
+
+        raise RuntimeError(
+            f"Không có provider dự phòng khả dụng. "
+            f"Lỗi {primary}: {type(primary_error).__name__}: {primary_error}."
+        ) from primary_error
 
     @staticmethod
     def _build_analysis_prompt(data_text: str, intraday_text: str = "") -> str:
