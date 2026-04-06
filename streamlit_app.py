@@ -5,7 +5,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import pandas as pd
 import streamlit as st
@@ -15,7 +15,23 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from agent import StockAnalysisAgent, parse_tickers  # noqa: E402
+
+def _load_agent_symbols() -> tuple[Any, Any]:
+    """Lazy-load module `agent` so missing deps don't crash app import-time."""
+    if "_agent_cls" in st.session_state and "_parse_tickers_fn" in st.session_state:
+        return st.session_state._agent_cls, st.session_state._parse_tickers_fn
+
+    try:
+        from agent import StockAnalysisAgent as AgentClass, parse_tickers as parse_fn  # noqa: E402
+    except Exception as exc:
+        st.session_state._agent_loader_trace = traceback.format_exc()
+        raise RuntimeError(
+            "Không thể tải module agent. Kiểm tra dependencies trên Streamlit Cloud (anthropic, vnstock, fpdf2)."
+        ) from exc
+
+    st.session_state._agent_cls = AgentClass
+    st.session_state._parse_tickers_fn = parse_fn
+    return AgentClass, parse_fn
 
 # ─────────────────────────────────────────────
 # CẤU HÌNH TRANG
@@ -271,9 +287,10 @@ div[data-testid="stDownloadButton"] > button:hover {
 # ─────────────────────────────────────────────
 # HÀM TIỆN ÍCH
 # ─────────────────────────────────────────────
-def get_agent() -> StockAnalysisAgent:
+def get_agent() -> Any:
+    agent_cls, _ = _load_agent_symbols()
     if "agent" not in st.session_state:
-        st.session_state.agent = StockAnalysisAgent()
+        st.session_state.agent = agent_cls()
     return st.session_state.agent
 
 
@@ -677,7 +694,8 @@ def render_batch_tab() -> None:
         run_batch = st.button("🚀 Chạy phân tích", type="primary", use_container_width=True)
 
     if run_batch:
-        symbols = parse_tickers(batch_input)
+        _, parse_tickers_fn = _load_agent_symbols()
+        symbols = parse_tickers_fn(batch_input)
         agent = get_agent()
         if not symbols:
             st.warning("⚠️ Vui lòng nhập ít nhất 1 mã hợp lệ.")
